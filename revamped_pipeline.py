@@ -11,8 +11,7 @@ from pathlib import Path
 from googleapiclient.discovery import build
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pymongo import MongoClient
-from google.ai import generativelanguage as glm
-from google.ai.generativelanguage import EmbedContentConfig
+from google.genai.types import EmbedContentConfig
 from pdf2image import convert_from_path, pdfinfo_from_path
 from fpdf import FPDF
 import math
@@ -53,9 +52,8 @@ class GeminiConfig(BaseModel):
     chunks: list[innerchunks]
     summary: str
 
-starti = 1000
-endi = 1300
-PAGE_LIMIT = 1450
+starti = 0
+PAGE_LIMIT = 500
 
 download_dir = "downloads"
 os.makedirs(download_dir, exist_ok=True)
@@ -758,43 +756,42 @@ def start_vector():
         except Empty:
             continue
 
-if __name__ == '__main__':
-    download_queue = Queue()
-    parsed_queue = Queue()
-    parsing_thread = threading.Thread(target=start_parse)
-    parsing_thread.start()
-    vectorizing_thread = threading.Thread(target=start_vector)
-    vectorizing_thread.start()
-    processed_indexes = set()
-    try:
-        fetched_links = set(documents_collection.distinct("Link"))
-        logging.info(f"Already processed links: {len(fetched_links)}")
-        with ThreadPoolExecutor(max_workers=10) as download_executor:
-            session = requests.Session()
-            for index, row in data.iloc[starti:endi].iterrows():
-                with page_lock:
-                    if page_limit_reached:
-                        break
-                link_value = str(row["Link"]).strip()
-                if not link_value:
-                    link_value = "https://www.imsnsit.org/imsnsit/notifications.php" + " | " + str(row["Title"]).strip().lower()
-                if link_value in fetched_links and "drive.google.com/drive/folders" not in link_value:
-                    logging.info(f"Skipping {row['Title']} as it's already processed.")
-                    continue
-                download_executor.submit(download_file, row["Link"], session, headers, index, fetched_links)
-        download_done = True
-        parsing_thread.join()
-        parse_done = True
-        vectorizing_thread.join()
-        logging.info(f"Total pages processed: {total_pages_processed}")
-        logging.info("🎉 All processes completed successfully!")
-    except KeyboardInterrupt:
-        logging.warning("Process interrupted by user. Cleaning up...")
-        download_done = True
-        parse_done = True
-        parsing_thread.join()
-        vectorizing_thread.join()
-        exit()
-    except Exception as e:
-        logging.error(f"Main process error: {e}")
-        exit()
+download_queue = Queue()
+parsed_queue = Queue()
+parsing_thread = threading.Thread(target=start_parse)
+parsing_thread.start()
+vectorizing_thread = threading.Thread(target=start_vector)
+vectorizing_thread.start()
+processed_indexes = set()
+try:
+    fetched_links = set(documents_collection.distinct("Link"))
+    logging.info(f"Already processed links: {len(fetched_links)}")
+    with ThreadPoolExecutor(max_workers=10) as download_executor:
+        session = requests.Session()
+        for index, row in data.iterrows():
+            with page_lock:
+                if page_limit_reached:
+                    break
+            link_value = str(row["Link"]).strip()
+            if not link_value:
+                link_value = "https://www.imsnsit.org/imsnsit/notifications.php" + " | " + str(row["Title"]).strip().lower()
+            if link_value in fetched_links and "drive.google.com/drive/folders" not in link_value:
+                logging.info(f"Skipping {row['Title']} as it's already processed.")
+                continue
+            download_executor.submit(download_file, row["Link"], session, headers, index, fetched_links)
+    download_done = True
+    parsing_thread.join()
+    parse_done = True
+    vectorizing_thread.join()
+    logging.info(f"Total pages processed: {total_pages_processed}")
+    logging.info("🎉 All processes completed successfully!")
+except KeyboardInterrupt:
+    logging.warning("Process interrupted by user. Cleaning up...")
+    download_done = True
+    parse_done = True
+    parsing_thread.join()
+    vectorizing_thread.join()
+    exit()
+except Exception as e:
+    logging.error(f"Main process error: {e}")
+    exit()
