@@ -1,0 +1,724 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Mimir Pipeline Dashboard</title>
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.0/css/all.min.css">
+    <style>
+        :root {
+            --primary-color: #0ff;
+            --secondary-color: #00b3b3;
+            --dark-bg: #0a0e17;
+            --card-bg: #111927;
+            --text-color: #e0e0e0;
+            --accent-color: #ff3e3e;
+            --success-color: #00ff9d;
+        }
+        
+        body {
+            background-color: var(--dark-bg);
+            color: var(--text-color);
+            font-family: 'Courier New', monospace;
+            padding-top: 2rem;
+            position: relative;
+            overflow-x: hidden;
+        }
+        
+        body::before {
+            content: "";
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: 
+                linear-gradient(rgba(10, 14, 23, 0.9), rgba(10, 14, 23, 0.9)),
+                url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><rect width="100" height="100" fill="none"/><path d="M0,0 L100,100 M100,0 L0,100" stroke="rgba(0,255,255,0.05)" stroke-width="0.5"/></svg>');
+            z-index: -1;
+        }
+        
+        .grid-lines {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-size: 50px 50px;
+            background-image: 
+                linear-gradient(to right, rgba(0, 255, 255, 0.05) 1px, transparent 1px),
+                linear-gradient(to bottom, rgba(0, 255, 255, 0.05) 1px, transparent 1px);
+            z-index: -1;
+        }
+        
+        .container {
+            position: relative;
+            z-index: 1;
+        }
+        
+        .card {
+            background-color: var(--card-bg);
+            border: 1px solid rgba(0, 255, 255, 0.2);
+            border-radius: 8px;
+            box-shadow: 0 0 15px rgba(0, 255, 255, 0.1);
+            margin-bottom: 1.5rem;
+            transition: all 0.3s ease;
+            overflow: hidden;
+        }
+        
+        .card:hover {
+            box-shadow: 0 0 25px rgba(0, 255, 255, 0.2);
+            transform: translateY(-5px);
+        }
+        
+        .card-header {
+            background-color: rgba(0, 255, 255, 0.1);
+            border-bottom: 1px solid rgba(0, 255, 255, 0.2);
+            color: var(--primary-color);
+            font-weight: bold;
+        }
+        
+        .card-body {
+            color: var(--text-color);
+        }
+        
+        .status-card {
+            position: relative;
+            overflow: hidden;
+        }
+        
+        .status-card::after {
+            content: "";
+            position: absolute;
+            top: -50%;
+            left: -50%;
+            width: 200%;
+            height: 200%;
+            background: conic-gradient(
+                transparent, 
+                rgba(0, 255, 255, 0.1), 
+                transparent 30%
+            );
+            animation: rotate 10s linear infinite;
+            z-index: -1;
+        }
+        
+        @keyframes rotate {
+            100% {
+                transform: rotate(360deg);
+            }
+        }
+        
+        .status-badge {
+            font-size: 0.9rem;
+            padding: 0.4rem 0.8rem;
+            border-radius: 4px;
+            font-family: 'Courier New', monospace;
+            letter-spacing: 1px;
+            text-shadow: 0 0 5px currentColor;
+        }
+        
+        .idle { 
+            background-color: #2d3748; 
+            color: #a0aec0;
+        }
+        
+        .running { 
+            background-color: rgba(0, 123, 255, 0.2); 
+            color: var(--primary-color);
+            border: 1px solid var(--primary-color);
+            animation: pulse 1.5s infinite, glitch 3s infinite;
+        }
+        
+        .completed { 
+            background-color: rgba(40, 167, 69, 0.2); 
+            color: var(--success-color);
+            border: 1px solid var(--success-color);
+        }
+        
+        .failed { 
+            background-color: rgba(220, 53, 69, 0.2); 
+            color: var(--accent-color);
+            border: 1px solid var(--accent-color);
+        }
+        
+        @keyframes pulse {
+            0% { opacity: 1; }
+            50% { opacity: 0.7; }
+            100% { opacity: 1; }
+        }
+        
+        @keyframes glitch {
+            0% { transform: translate(0); }
+            2% { transform: translate(-3px, 2px); }
+            4% { transform: translate(0); }
+            5% { transform: translate(3px, -2px); }
+            6% { transform: translate(0); }
+            92% { transform: translate(0); }
+            94% { transform: translate(5px, 1px); }
+            96% { transform: translate(0); }
+            98% { transform: translate(-5px, -1px); }
+            100% { transform: translate(0); }
+        }
+        
+        .log-container {
+            background-color: #0c1221;
+            color: var(--text-color);
+            border: 1px solid rgba(0, 255, 255, 0.2);
+            border-radius: 4px;
+            padding: 1rem;
+            height: 300px;
+            overflow-y: auto;
+            font-family: 'Courier New', monospace;
+            margin-top: 1rem;
+            position: relative;
+        }
+        
+        .log-container::before {
+            content: "";
+            position: absolute;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background: repeating-linear-gradient(
+                0deg,
+                rgba(0, 0, 0, 0.15),
+                rgba(0, 0, 0, 0.15) 1px,
+                transparent 1px,
+                transparent 2px
+            );
+            pointer-events: none;
+        }
+        
+        #log-content {
+            color: var(--primary-color);
+            text-shadow: 0 0 5px rgba(0, 255, 255, 0.5);
+        }
+        
+        .btn {
+            border-radius: 4px;
+            font-weight: bold;
+            text-transform: uppercase;
+            letter-spacing: 1px;
+            transition: all 0.3s ease;
+            position: relative;
+            overflow: hidden;
+            z-index: 1;
+        }
+        
+        .btn::after {
+            content: '';
+            position: absolute;
+            bottom: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-color: rgba(255, 255, 255, 0.1);
+            transform: scaleX(0);
+            transform-origin: right;
+            transition: transform 0.3s ease;
+            z-index: -1;
+        }
+        
+        .btn:hover::after {
+            transform: scaleX(1);
+            transform-origin: left;
+        }
+        
+        .btn-primary {
+            background-color: rgba(0, 123, 255, 0.2);
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+        }
+        
+        .btn-primary:hover, .btn-primary:focus {
+            background-color: rgba(0, 123, 255, 0.3);
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+        }
+        
+        .btn-secondary {
+            background-color: rgba(108, 117, 125, 0.2);
+            border: 1px solid #6c757d;
+            color: #e0e0e0;
+        }
+        
+        .btn-secondary:hover, .btn-secondary:focus {
+            background-color: rgba(108, 117, 125, 0.3);
+            border: 1px solid #6c757d;
+            color: #ffffff;
+        }
+        
+        .btn-outline-primary {
+            background-color: transparent;
+            border: 1px solid var(--primary-color);
+            color: var(--primary-color);
+        }
+        
+        .btn-outline-primary:hover, .btn-outline-primary:focus {
+            background-color: rgba(0, 123, 255, 0.1);
+            color: var(--primary-color);
+            box-shadow: 0 0 10px rgba(0, 255, 255, 0.3);
+        }
+        
+        .display-4 {
+            color: var(--primary-color);
+            font-weight: bold;
+            text-shadow: 0 0 10px rgba(0, 255, 255, 0.5);
+            letter-spacing: 2px;
+        }
+        
+        .lead {
+            color: var(--text-color);
+            font-size: 1.2rem;
+        }
+        
+        .alert-danger {
+            background-color: rgba(220, 53, 69, 0.2);
+            border: 1px solid var(--accent-color);
+            color: var(--accent-color);
+        }
+        
+        .badge {
+            font-family: 'Courier New', monospace;
+        }
+        
+        .bg-success {
+            background-color: rgba(40, 167, 69, 0.2) !important;
+            color: var(--success-color) !important;
+            border: 1px solid var(--success-color);
+        }
+        
+        .bg-secondary {
+            background-color: #2d3748 !important;
+            color: #a0aec0 !important;
+            border: 1px solid #a0aec0;
+        }
+        
+        .typing-effect {
+            overflow: hidden;
+            border-right: 2px solid var(--primary-color);
+            white-space: nowrap;
+            margin: 0 auto;
+            animation: typing 3.5s steps(40, end), blink-caret 0.75s step-end infinite;
+        }
+        
+        @keyframes typing {
+            from { width: 0 }
+            to { width: 100% }
+        }
+        
+        @keyframes blink-caret {
+            from, to { border-color: transparent }
+            50% { border-color: var(--primary-color) }
+        }
+        
+        .status-info {
+            display: flex;
+            align-items: center;
+            margin-bottom: 0.5rem;
+        }
+        
+        .status-info strong {
+            min-width: 150px;
+            color: var(--primary-color);
+        }
+        
+        .hexagon-bg {
+            position: fixed;
+            top: 0;
+            left: 0;
+            width: 100%;
+            height: 100%;
+            background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" width="100" height="100" viewBox="0 0 100 100"><polygon points="50,0 93.3,25 93.3,75 50,100 6.7,75 6.7,25" fill="none" stroke="rgba(0,255,255,0.03)" stroke-width="1"/></svg>');
+            background-size: 100px 100px;
+            z-index: -2;
+        }
+    </style>
+</head>
+<body>
+    <div class="grid-lines"></div>
+    <div class="hexagon-bg"></div>
+    
+    <div class="container">
+        <div class="row mb-4">
+            <div class="col-12 text-center">
+                <h1 class="display-4 mb-3">
+                    <i class="fas fa-network-wired me-2"></i>MIMIR PIPELINE
+                </h1>
+                <p class="lead typing-effect">Monitor and control the university notification pipeline</p>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-md-6">
+                <div class="card status-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-spider me-2"></i>Web Scraper Status</h5>
+                        <span id="scraper-status" class="badge status-badge {{ status.scraping }}">
+                            {{ status.scraping.upper() }}
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        <p class="card-text">The web scraper collects notifications from the university website.</p>
+                        <div class="progress mt-2" style="height: 5px; background-color: rgba(0, 255, 255, 0.1);">
+                            <div id="scraper-progress" class="progress-bar" role="progressbar" 
+                                 style="width: {% if status.scraping == 'completed' %}100%{% else %}0%{% endif %}; background-color: var(--primary-color);" 
+                                 aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <div class="col-md-6">
+                <div class="card status-card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-cogs me-2"></i>Pipeline Status</h5>
+                        <span id="pipeline-status" class="badge status-badge {{ status.processing }}">
+                            {{ status.processing.upper() }}
+                        </span>
+                    </div>
+                    <div class="card-body">
+                        <p class="card-text">The pipeline processes notifications into searchable data.</p>
+                        <div class="progress mt-2" style="height: 5px; background-color: rgba(0, 255, 255, 0.1);">
+                            <div id="pipeline-progress" class="progress-bar" role="progressbar" 
+                                 style="width: {{ '100%' if status.processing == 'completed' else '0%' }}; background-color: var(--primary-color);"
+                                 aria-valuenow="{{ 100 if status.processing == 'completed' else 0 }}" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row mb-4">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header">
+                        <h5 class="mb-0"><i class="fas fa-terminal me-2"></i>Pipeline Controls</h5>
+                    </div>
+                    <div class="card-body">
+                        <div class="d-flex flex-wrap gap-2 mb-3">
+                            <button id="start-btn" class="btn btn-primary">
+                                <i class="fas fa-play me-2"></i>Start Pipeline
+                            </button>
+                            <button id="refresh-btn" class="btn btn-secondary">
+                                <i class="fas fa-sync-alt me-2"></i>Refresh Status
+                            </button>
+                            <button id="auto-btn" class="btn btn-outline-primary">
+                                <i class="fas fa-{{ 'stop' if status.auto_mode else 'clock' }} me-2"></i>
+                                {{ "Disable Auto Mode" if status.auto_mode else "Enable Auto Mode" }}
+                            </button>
+                        </div>
+                        
+                        <div id="error-alert" class="alert alert-danger mt-3 d-none">
+                            <i class="fas fa-exclamation-triangle me-2"></i>
+                            <strong>Error:</strong> <span id="error-message"></span>
+                        </div>
+                        
+                        <div class="mt-4">
+                            <div class="status-info">
+                                <strong><i class="fas fa-history me-2"></i>Last Run:</strong> 
+                                <span id="last-run">{{ status.last_run or 'Never' }}</span>
+                            </div>
+                            
+                            <div id="next-run-container" class="status-info {{ 'd-none' if not status.auto_mode else '' }}">
+                                <strong><i class="fas fa-calendar-alt me-2"></i>Next Run:</strong> 
+                                <span id="next-run">{{ status.next_run or 'Not scheduled' }}</span>
+                            </div>
+                            
+                            <div class="status-info">
+                                <strong><i class="fas fa-robot me-2"></i>Auto Mode:</strong> 
+                                <span id="auto-status" class="badge {{ 'bg-success' if status.auto_mode else 'bg-secondary' }}">
+                                    {{ "ENABLED" if status.auto_mode else "DISABLED" }}
+                                </span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <div class="row">
+            <div class="col-12">
+                <div class="card">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h5 class="mb-0"><i class="fas fa-code me-2"></i>System Logs</h5>
+                        <small class="text-muted">Live Output</small>
+                    </div>
+                    <div class="card-body">
+                        <div id="log-container" class="log-container">
+                            <div id="log-content">Initializing system logs...</div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const startBtn = document.getElementById('start-btn');
+            const refreshBtn = document.getElementById('refresh-btn');
+            const autoBtn = document.getElementById('auto-btn');
+            const errorAlert = document.getElementById('error-alert');
+            const errorMessage = document.getElementById('error-message');
+            const scraperStatus = document.getElementById('scraper-status');
+            const pipelineStatus = document.getElementById('pipeline-status');
+            const lastRun = document.getElementById('last-run');
+            const nextRun = document.getElementById('next-run');
+            const nextRunContainer = document.getElementById('next-run-container');
+            const autoStatus = document.getElementById('auto-status');
+            const logContent = document.getElementById('log-content');
+            const scraperProgress = document.getElementById('scraper-progress');
+            const pipelineProgress = document.getElementById('pipeline-progress');
+            
+            // Function to update progress bars based on status
+            function updateProgressBars(scraperState, pipelineState) {
+                // Scraper progress
+                if (scraperState === 'running') {
+                    scraperProgress.style.width = '50%';
+                    scraperProgress.classList.add('progress-bar-animated', 'progress-bar-striped');
+                } else if (scraperState === 'completed') {
+                    scraperProgress.style.width = '100%';
+                    scraperProgress.classList.remove('progress-bar-animated', 'progress-bar-striped');
+                } else {
+                    scraperProgress.style.width = '0%';
+                    scraperProgress.classList.remove('progress-bar-animated', 'progress-bar-striped');
+                }
+                
+                // Pipeline progress
+                if (pipelineState === 'running') {
+                    pipelineProgress.style.width = '50%';
+                    pipelineProgress.classList.add('progress-bar-animated', 'progress-bar-striped');
+                } else if (pipelineState === 'completed') {
+                    pipelineProgress.style.width = '100%';
+                    pipelineProgress.classList.remove('progress-bar-animated', 'progress-bar-striped');
+                } else {
+                    pipelineProgress.style.width = '0%';
+                    pipelineProgress.classList.remove('progress-bar-animated', 'progress-bar-striped');
+                }
+            }
+            
+            // Function to update status
+            function updateStatus() {
+                fetch('/status')
+                    .then(response => response.json())
+                    .then(data => {
+                        // Update status badges
+                        scraperStatus.textContent = data.scraping.toUpperCase();
+                        scraperStatus.className = `badge status-badge ${data.scraping}`;
+                        
+                        pipelineStatus.textContent = data.processing.toUpperCase();
+                        pipelineStatus.className = `badge status-badge ${data.processing}`;
+                        
+                        // Update progress bars
+                        updateProgressBars(data.scraping, data.processing);
+                        
+                        // Update last run time
+                        lastRun.textContent = data.last_run || 'Never';
+                        
+                        // Update auto mode status
+                        autoBtn.innerHTML = `<i class="fas fa-${data.auto_mode ? 'stop' : 'clock'} me-2"></i>${data.auto_mode ? 'Disable Auto Mode' : 'Enable Auto Mode'}`;
+                        autoStatus.textContent = data.auto_mode ? 'ENABLED' : 'DISABLED';
+                        autoStatus.className = data.auto_mode ? 'badge bg-success' : 'badge bg-secondary';
+                        
+                        // Update next run time
+                        if (data.next_run) {
+                            nextRun.textContent = data.next_run;
+                            nextRunContainer.classList.remove('d-none');
+                        } else {
+                            nextRun.textContent = 'Not scheduled';
+                            if (!data.auto_mode) {
+                                nextRunContainer.classList.add('d-none');
+                            }
+                        }
+                        
+                        // Show error if any
+                        if (data.error) {
+                            errorMessage.textContent = data.error;
+                            errorAlert.classList.remove('d-none');
+                        } else {
+                            errorAlert.classList.add('d-none');
+                        }
+                        
+                        // Disable start button if a job is running
+                        startBtn.disabled = (data.scraping === 'running' || data.processing === 'running');
+                    })
+                    .catch(error => {
+                        console.error('Error fetching status:', error);
+                    });
+            }
+            
+            // Function to fetch logs with typewriter effect
+            function fetchLogs() {
+                fetch('/logs')
+                    .then(response => response.text())
+                    .then(data => {
+                        // Apply a simple typewriter effect for new log entries
+                        const currentLogs = logContent.innerHTML.replace(/<br>/g, '\n');
+                        const newLogs = data.replace(/\n/g, '<br>');
+                        
+                        if (currentLogs !== newLogs) {
+                            logContent.innerHTML = newLogs;
+                            const logContainer = document.getElementById('log-container');
+                            logContainer.scrollTop = logContainer.scrollHeight;
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error fetching logs:', error);
+                    });
+            }
+            
+            // Start button click handler
+            startBtn.addEventListener('click', function() {
+                startBtn.disabled = true;
+                startBtn.innerHTML = '<i class="fas fa-spinner fa-spin me-2"></i>Starting...';
+                
+                fetch('/start', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    startBtn.innerHTML = '<i class="fas fa-play me-2"></i>Start Pipeline';
+                    
+                    if (data.status === 'error') {
+                        errorMessage.textContent = data.message;
+                        errorAlert.classList.remove('d-none');
+                    } else {
+                        errorAlert.classList.add('d-none');
+                        // Update status immediately
+                        updateStatus();
+                    }
+                })
+                .catch(error => {
+                    console.error('Error starting pipeline:', error);
+                    errorMessage.textContent = 'Failed to start pipeline. Please try again.';
+                    errorAlert.classList.remove('d-none');
+                    startBtn.disabled = false;
+                    startBtn.innerHTML = '<i class="fas fa-play me-2"></i>Start Pipeline';
+                });
+            });
+            
+            // Auto mode toggle button click handler
+            autoBtn.addEventListener('click', function() {
+                autoBtn.disabled = true;
+                
+                fetch('/toggle-auto', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    }
+                })
+                .then(response => response.json())
+                .then(data => {
+                    autoBtn.disabled = false;
+                    
+                    if (data.status === 'error') {
+                        errorMessage.textContent = data.message;
+                        errorAlert.classList.remove('d-none');
+                    } else {
+                        errorAlert.classList.add('d-none');
+                        
+                        // Update auto mode status
+                        autoBtn.innerHTML = `<i class="fas fa-${data.auto_mode ? 'stop' : 'clock'} me-2"></i>${data.auto_mode ? 'Disable Auto Mode' : 'Enable Auto Mode'}`;
+                        autoStatus.textContent = data.auto_mode ? 'ENABLED' : 'DISABLED';
+                        autoStatus.className = data.auto_mode ? 'badge bg-success' : 'badge bg-secondary';
+                        
+                        // Update next run time
+                        if (data.next_run) {
+                            nextRun.textContent = data.next_run;
+                            nextRunContainer.classList.remove('d-none');
+                        } else {
+                            nextRun.textContent = 'Not scheduled';
+                            nextRunContainer.classList.add('d-none');
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Error toggling auto mode:', error);
+                    errorMessage.textContent = 'Failed to toggle auto mode. Please try again.';
+                    errorAlert.classList.remove('d-none');
+                    autoBtn.disabled = false;
+                });
+            });
+            
+            // Refresh button click handler with animation
+            refreshBtn.addEventListener('click', function() {
+                refreshBtn.innerHTML = '<i class="fas fa-sync-alt fa-spin me-2"></i>Refreshing...';
+                refreshBtn.disabled = true;
+                
+                updateStatus();
+                fetchLogs();
+                
+                setTimeout(() => {
+                    refreshBtn.innerHTML = '<i class="fas fa-sync-alt me-2"></i>Refresh Status';
+                    refreshBtn.disabled = false;
+                }, 1000);
+            });
+            
+            // Initial status update
+            updateStatus();
+            fetchLogs();
+            
+            // Set up periodic status updates
+            setInterval(updateStatus, 5000);
+            
+            // Set up periodic log updates
+            setInterval(fetchLogs, 10000);
+            
+            // Add matrix-like animation to the background
+            function createMatrixEffect() {
+                const canvas = document.createElement('canvas');
+                canvas.width = window.innerWidth;
+                canvas.height = window.innerHeight;
+                canvas.style.position = 'fixed';
+                canvas.style.top = '0';
+                canvas.style.left = '0';
+                canvas.style.zIndex = '-3';
+                canvas.style.opacity = '0.05';
+                document.body.appendChild(canvas);
+                
+                const ctx = canvas.getContext('2d');
+                const characters = "01";
+                const fontSize = 10;
+                const columns = canvas.width / fontSize;
+                const drops = [];
+                
+                for (let i = 0; i < columns; i++) {
+                    drops[i] = 1;
+                }
+                
+                function draw() {
+                    ctx.fillStyle = 'rgba(10, 14, 23, 0.05)';
+                    ctx.fillRect(0, 0, canvas.width, canvas.height);
+                    
+                    ctx.fillStyle = '#0ff';
+                    ctx.font = fontSize + 'px monospace';
+                    
+                    for (let i = 0; i < drops.length; i++) {
+                        const text = characters.charAt(Math.floor(Math.random() * characters.length));
+                        ctx.fillText(text, i * fontSize, drops[i] * fontSize);
+                        
+                        if (drops[i] * fontSize > canvas.height && Math.random() > 0.975) {
+                            drops[i] = 0;
+                        }
+                        
+                        drops[i]++;
+                    }
+                }
+                
+                setInterval(draw, 33);
+            }
+            
+            createMatrixEffect();
+        });
+    </script>
+</body>
+</html> 

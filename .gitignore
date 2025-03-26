@@ -1,0 +1,49 @@
+# Environment variables
+.env
+
+# Virtual environment
+.env/
+env/
+
+ENV/
+myenv/
+
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Logs
+*.log
+app.log
+flask_app.log
+
+# Downloaded files and processing artifacts
+downloads/
+output.csv
+failed_pages.csv
+vectorized_files.txt
+
+# IDE specific files
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store 
