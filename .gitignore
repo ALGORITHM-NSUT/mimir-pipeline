@@ -47,3 +47,6 @@ vectorized_files.txt
 *.swp
 *.swo
 .DS_Store 
+
+# Account Keys
+.json
