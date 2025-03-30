@@ -37,7 +37,7 @@ response = requests.get(url)
 soup = BeautifulSoup(response.text, "html.parser")
 
 data = []
-cutoff_date = datetime.strptime("29-03-2025", "%d-%m-%Y")
+cutoff_date = datetime.strptime("20-03-2025", "%d-%m-%Y")
 
 trs = soup.find_all("tr")
 for tr in trs:
