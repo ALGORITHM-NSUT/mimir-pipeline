@@ -1,0 +1,37 @@
+name: Check API
+
+on:
+  schedule:
+    - cron: "0 0 * * *"  # Runs at 12 AM UTC daily
+
+jobs:
+  run-script:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Call API
+        run: |
+          SUCCESS_COUNT=0  # Counter for 200 responses
+
+          while true; do
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://mimir-pipeline.onrender.com)
+            echo "Response Code: $STATUS"
+
+            if [ "$STATUS" -eq 200 ]; then
+              SUCCESS_COUNT=$((SUCCESS_COUNT + 1))
+              echo "API Success Count: $SUCCESS_COUNT"
+              
+              if [ "$SUCCESS_COUNT" -eq 2 ]; then
+                echo "Second 200 response received! Stopping."
+                break
+              fi
+
+              echo "Waiting 10 minutes before checking again..."
+            elif [ "$STATUS" -eq 409 ]; then
+              echo "Conflict (409). Retrying in 10 minutes..."
+            else
+              echo "Unexpected status $STATUS. Stopping."
+              break
+            fi
+            
+            sleep 600  # Wait 10 minutes before checking again
+          done
