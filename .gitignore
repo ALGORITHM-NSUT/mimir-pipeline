@@ -49,4 +49,4 @@ vectorized_files.txt
 .DS_Store 
 
 # Account Keys
-.json
+*.json

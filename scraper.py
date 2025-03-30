@@ -1,11 +1,12 @@
-from selenium import webdriver
-from selenium.webdriver.common.by import By
+import requests
+from bs4 import BeautifulSoup
 import pandas as pd
 from datetime import datetime
 from pymongo import MongoClient
 from googleapiclient.discovery import build
 import os
 import logging
+
 mongo_client = MongoClient(os.getenv("MONGO_URI"))
 
 logging.basicConfig(
@@ -15,23 +16,6 @@ logging.basicConfig(
     filename='flask_app.log',
     filemode='a'
 )
-
-mongo_client = MongoClient(os.getenv("MONGO_URI"))
-options = webdriver.ChromeOptions()
-options.add_argument('--headless')
-driver = webdriver.Chrome(options=options)
-url = "https://www.imsnsit.org/imsnsit/notifications.php"
-
-# Load the webpage
-driver.get(url)
-elem = driver.find_element(By.NAME, "olddata")
-elem.click()
-
-# Set cutoff date to only parse notifications from 17-02-2025
-cutoff_date = datetime.strptime("26-03-2025", "%d-%m-%Y")
-
-# List to store extracted data
-data = []
 
 def list_public_drive_files(folder_id):
     logging.info(f"Listing public drive files in folder: {folder_id}")
@@ -48,66 +32,68 @@ def list_public_drive_files(folder_id):
     logging.debug(f"Found {len(file_links)} files in folder {folder_id}")
     return file_links
 
-# Iterate through each tr tag
-trs = driver.find_elements(By.TAG_NAME, "tr")
+url = "https://www.imsnsit.org/imsnsit/notifications.php"
+response = requests.get(url)
+soup = BeautifulSoup(response.text, "html.parser")
+
+data = []
+cutoff_date = datetime.strptime("29-03-2025", "%d-%m-%Y")
+
+trs = soup.find_all("tr")
 for tr in trs:
-    tds = tr.find_elements(By.TAG_NAME, "td")
+    tds = tr.find_all("td")
     if len(tds) >= 2:
-        date_text = tds[0].text  # Extract date
+        date_text = tds[0].text.strip()
         try:
             date_obj = datetime.strptime(date_text, "%d-%m-%Y")
-            # If the date is before the cutoff date, stop processing further rows.
             if date_obj < cutoff_date:
                 break
         except ValueError:
             continue
         
-        # Extract the first hyperlink (if available)
-        link_tag = tds[1].find_element(By.TAG_NAME, "a") if tds[1].find_elements(By.TAG_NAME, "a") else None
-        link = link_tag.get_attribute("href") if link_tag else ""
+        link_tag = tds[1].find("a")
+        link = link_tag["href"] if link_tag else ""
         title = link_tag.text.strip() if link_tag else ""
+        if not link:
+            link = "https://www.imsnsit.org/imsnsit/notifications.php" + " | " + title.strip().lower()
         links = []
         if "drive.google.com/file/d/" in link:
             link = link.replace("drive.google.com/file/d/", "drive.google.com/uc?id=")
-        if "drive.google.com/drive/folders" in url:
-            folder_id = url.split("folders/")[-1].split("?")[0]
+        if "drive.google.com/drive/folders" in link:
+            folder_id = link.split("folders/")[-1].split("?")[0]
             links = list_public_drive_files(folder_id)
-        # Handle alternative tag structure if link_tag is not found
-        b_tags = tr.find_elements(By.TAG_NAME, "b")
-        if not link_tag and len(b_tags) >= 2:
-            title = b_tags[0].text.strip()
-            published_by = b_tags[1].text.replace("Published By: ", "").strip()
-        else:
-            published_by = b_tags[0].text.replace("Published By: ", "").strip() if b_tags else ""
+        
+        b_tags = tr.find_all("b")
+        published_by = b_tags[0].text.replace("Published By: ", "").strip() if b_tags else ""
+        
         if len(links) == 0:
             data.append([date_text, link, title, published_by])
         else:
             for link in links:
                 data.append([date_text, link, title, published_by])
 
-# Close the browser
-driver.quit()
-
 db = mongo_client["Docs"]
 documents_collection = db["documents"]
 fetched_links = set(documents_collection.distinct("Link"))
+fetched_titles_dates = set(
+    (doc["Title"].strip().casefold(), doc["Publish Date"].strftime("%d-%m-%Y")) for doc in documents_collection.find({}, {"Title": 1, "Publish Date": 1})
+)
 
 filtered_data = []
-
-for tuple in data:
-    if tuple[1] not in fetched_links:
-        filtered_data.append(tuple)
+for entry in data:
+    date_text, link, title, published_by = entry
+    if link in fetched_links:
+        logging.debug("Skipping file with title: %s (already exists by link)", title)
+        continue
+    if (title.casefold(), date_text) in fetched_titles_dates:
+        logging.debug("Skipping file with title: %s and date: %s (already exists by title-date combination)", title, date_text)
+        continue
     else:
-        logging.debug("Skipping a file with title : %s", tuple[2])
+        logging.debug("Inserting new file in csv with title: %s and date: %s", title, date_text)
+    filtered_data.append(entry)
 
-# Create a DataFrame
-# Check if file exists
 file_exists = os.path.isfile("output.csv")
-
-# Create a DataFrame
 df = pd.DataFrame(filtered_data, columns=["Date", "Link", "Title", "Published By"])
-
-# Append to CSV without overwriting, and avoid adding headers again if the file exists
 df.to_csv("output.csv", mode="a", index=False, header=not file_exists)
 
 logging.info("New data has been appended to the CSV file successfully!")

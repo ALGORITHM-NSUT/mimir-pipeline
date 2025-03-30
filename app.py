@@ -66,8 +66,7 @@ def upload_to_drive(file_path, filename):
             
         file_metadata = {
             'name': filename,
-            'mimeType': 'application/pdf',
-            'parents': [FOLDER_ID]
+            'mimeType': 'application/pdf'
         }
         
         media = MediaFileUpload(file_path, mimetype='application/pdf')
@@ -154,7 +153,7 @@ def run_scraper():
         logging.info("Starting web scraper...")
         
         result = subprocess.run(
-            ["python", "new.py"], 
+            ["python", "scraper.py"], 
             check=True,
             capture_output=True,
             text=True
@@ -366,21 +365,21 @@ def upload_pdf():
                 "status": "queued",
                 "message": "File upload queued for processing"
             })
-        # else:
-        #     # Process immediately
-        #     if link:
-        #         # Add to CSV
-        #         add_to_csv(date, link, title, published_by)
+        else:
+            # Process immediately
+            if link:
+                # Add to CSV
+                add_to_csv(date, link, title, published_by)
                 
-        #         # Remove the temporary file
-        #         os.remove(file_path)
+                # Remove the temporary file
+                os.remove(file_path)
                 
-        #         
-        #     else:
-        #         return jsonify({
-        #             "status": "error",
-        #             "message": "Failed to upload file to Google Drive"
-        #         }), 500
+                
+            else:
+                return jsonify({
+                    "status": "error",
+                    "message": "Failed to upload file to Google Drive"
+                }), 500
     return jsonify({
             "status": "success",
             "message": "File uploaded successfully",
@@ -404,7 +403,7 @@ if __name__ == '__main__':
         id='hourly_pipeline',
         func=scheduled_job,
         trigger='interval',
-        hours=1,
+        hours=0.02,
         next_run_time=None
     )
     

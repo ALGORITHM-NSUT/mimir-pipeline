@@ -9,7 +9,6 @@ import pandas as pd
 from queue import Queue, Empty
 from pathlib import Path
 from googleapiclient.discovery import build
-from concurrent.futures import ThreadPoolExecutor, as_completed
 from pymongo import MongoClient
 from google.genai.types import EmbedContentConfig
 from pdf2image import convert_from_path, pdfinfo_from_path
@@ -28,11 +27,6 @@ import mimetypes
 import logging
 import csv
 
-failed_pages_file = "failed_pages.csv"
-if not os.path.exists(failed_pages_file):
-    with open(failed_pages_file, mode="w", newline="", encoding="utf-8") as file:
-        writer = csv.writer(file)
-        writer.writerow(["Filename", "Page", "URL"])
 # Configure logging
 logging.basicConfig(
     level=logging.INFO,
@@ -52,32 +46,25 @@ class GeminiConfig(BaseModel):
     chunks: list[innerchunks]
     summary: str
 
-starti = 0
-PAGE_LIMIT = 500
-
 download_dir = "downloads"
 os.makedirs(download_dir, exist_ok=True)
 
 GEMINI_API_KEY = os.getenv("GOOGLE_API_KEY")
 client = genai.Client(api_key=GEMINI_API_KEY)
 
-download_semaphore = threading.Semaphore(10)
+download_semaphore = threading.Semaphore(1)
 gemini_lock = threading.Lock()
 last_gemini_time = 0
 GEMINI_RPM = 14
 GEMINI_INTERVAL = 60 / GEMINI_RPM
 MAX_RETRIES = 6
 HOURLY_RETRY_INTERVAL = 3600
-NUM_FILE_WORKERS = 4  # Adjust number of workers as needed
 embedding_lock = threading.Lock()
 last_embedding_time = 0
 request_interval = 60.0 / 149.0  # Enforces rate limits
-success_log_file = "vectorized_files.txt"
 download_done = False    
 parse_done = False 
-page_lock = threading.Lock()
 total_pages_processed = 0
-page_limit_reached = False
 processed_indexes = set()
 llm = "gemini-2.0-flash"
 
@@ -85,6 +72,7 @@ mongo_client = MongoClient(os.getenv("MONGO_URI"))
 db = mongo_client["Docs"]
 documents_collection = db["documents"]
 chunks_collection = db["chunks"]
+failed_collection = db["failed_documents"]
 
 data = pd.read_csv("./output.csv")
 headers = {
@@ -92,11 +80,9 @@ headers = {
     "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/113.0.0.0 Safari/537.36"
 }
 
-failed = []
 
 def sanitize_filename(filename):
     sanitized = re.sub(r'[<>:"/\\|?*];', '', filename)
-    logging.debug(f"Sanitized filename: {sanitized}")
     return sanitized
 
 def get_filename_from_header(response):
@@ -163,26 +149,19 @@ def download_drivefile(file_url, index, fetched_links):
             logging.info(f"File {filename} already processed (Drive), skipping download.")
             download_semaphore.release()
             return
-        logging.info(f"Downloading Drive file: {file_url} on index: {index}")
         gdown.download(file_url, file_path, quiet=False)
-        logging.info(f"Downloaded Drive file {filename}, index : {index}")
+        logging.info(f"Downloaded Drive file {filename} with URL: {file_url}")
         download_queue.put((filename, index, shareurl))
     except Exception as e:
-        logging.error(f"Failed to download Drive file {file_url}: {e}, index : {index}")
+        logging.error(f"Failed to download Drive file {file_url}: {e}")
         download_semaphore.release()
 
 def download_file(url, session, headers, index, fetched_links):
-    logging.debug(f"Acquiring semaphore for download_file for index {index}")
+    logging.debug(f"Acquiring semaphore for download_file")
     download_semaphore.acquire()
-    try:
-        with page_lock:
-            if page_limit_reached:
-                logging.info("Page limit reached, aborting download_file.")
-                download_semaphore.release()
-                return
-        
+    try:        
         if url == "" or (isinstance(url, float) and math.isnan(url)):
-            logging.info(f"⬇️ Downloading index {index} with URL: {url}")
+            logging.info(f"⬇️ Downloading file with URL: {url}")
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Arial", size=12)
@@ -203,7 +182,7 @@ def download_file(url, session, headers, index, fetched_links):
             file_url = f"https://drive.google.com/uc?id={file_id}"
             download_drivefile(file_url=file_url, index=index, fetched_links=fetched_links)
         elif "drive.google.com/drive/folders" in url:
-            logging.info(f"Checking Google Drive folder: {url}, index: {index}")
+            logging.info(f"Checking Google Drive folder: {url}")
             folder_id = url.split("folders/")[-1].split("?")[0]
             file_links = list_public_drive_files(folder_id)
             download_semaphore.release()  # Release current slot before processing folder links.
@@ -211,7 +190,7 @@ def download_file(url, session, headers, index, fetched_links):
                 download_file(link, session, headers, index, fetched_links)
             return
         elif "https://www.imsnsit.org/" in url:
-            logging.info(f"⬇️ Downloading index {index} with URL: {url}")
+            logging.info(f"⬇️ Downloading file with URL: {url}")
             response = session.get(url, headers=headers, stream=True, timeout=120)
             response.raise_for_status()
             filename = get_filename_from_header(response) or os.path.basename(url)
@@ -225,7 +204,7 @@ def download_file(url, session, headers, index, fetched_links):
             with open(file_path, "wb") as file:
                 for chunk in response.iter_content(chunk_size=8192):
                     file.write(chunk)
-            logging.info(f"Downloaded file: {filename}")
+            logging.info(f"Downloaded file: {filename} with URL: {url}")
             download_queue.put((filename, index, ""))
         else:
             logging.warning(f"Unknown URL format: {url}")
@@ -268,7 +247,7 @@ def generate_metadata(filename, raw_text, page_summary_text, index, num_pages, u
             if not link:
                 link = "https://www.imsnsit.org/imsnsit/notifications.php" + " | " + str(data.iloc[index]["Title"]).strip().lower()
         metadata["Link"] = link
-        logging.info("✅ Metadata successfully generated")
+        logging.info(f"Metadata successfully generated for {filename}.")
         metadata["summary"] = f'''
 Title: {metadata["Title"]}  
 Published on: {metadata["Publish Date"]}  
@@ -316,14 +295,14 @@ Page Summaries:
                 if "429" in error_msg or "rate limit" in error_msg or "quota exceeded" in error_msg:
                     logging.warning(f"Rate limit hit in summarization, attempt {attempts + 1}. Retrying...")
                 else:
-                    logging.warning(f"API call failed in summarization for index {index}: {error_msg}. Retrying...")
+                    logging.warning(f"API call failed in summarization: {error_msg}. Retrying...")
                 attempts += 1
                 if attempts >= MAX_RETRIES:
                     if "429" in error_msg or "rate limit" in error_msg or "quota exceeded" in error_msg:
                         logging.error(f"Max retries reached in image_to_markdown ({MAX_RETRIES}). Retrying every hour...")
                         time.sleep(HOURLY_RETRY_INTERVAL)
                     else:
-                        logging.info(f"failing pdf in summarization... for index {index}")
+                        logging.info(f"failing pdf in summarization...")
                         raise
                 else:
                     wait_time = exponential_backoff(attempts)
@@ -389,14 +368,14 @@ def image_to_markdown(image, previous_markdown, first_summary, index, failed_mar
                     elif llm == "gemini-2.0-flash-thinking-exp-01-21":
                         llm = "gemini-2.0-pro-exp-02-05"
             else:
-                logging.warning(f"API call failed in image_to_markdown for index {index}: {error_msg}. Retrying...")
+                logging.warning(f"API call failed in image_to_markdown: {error_msg}. Retrying...")
             attempts += 1
             if attempts >= MAX_RETRIES:
                 if "429" in error_msg or "rate limit" in error_msg or "quota exceeded" in error_msg:
                     logging.error(f"Max retries reached in image_to_markdown ({MAX_RETRIES}). Retrying every hour...")
                     time.sleep(HOURLY_RETRY_INTERVAL)
                 else:
-                    logging.info(f"failing pdf in image_to_markdown... for index {index}")
+                    logging.info(f"failing pdf in image_to_markdown...")
                     raise
             else:
                 wait_time = exponential_backoff(attempts)
@@ -407,18 +386,12 @@ def image_to_markdown(image, previous_markdown, first_summary, index, failed_mar
 def parse_pdf(pdf_path, filename, index, url):
     global total_pages_processed
     try:
-        logging.info(f"Parsing PDF: {pdf_path}")
+        logging.info(f"Parsing PDF: {filename}")
 
         # Get the number of pages without converting all pages at once
         pdf_info = pdfinfo_from_path(pdf_path)
         num_pages = pdf_info["Pages"]
         logging.info(f"{pdf_path} contains {num_pages} pages.")
-
-        with page_lock:
-            remaining = PAGE_LIMIT - total_pages_processed
-            if remaining < num_pages + 1:
-                logging.info(f"Skipping {pdf_path}: not enough remaining API calls (needed {num_pages + 1}, available {remaining}).")
-                return [], 0, {}
 
         markdown_outputs = []
         previous_markdown = ""
@@ -426,15 +399,8 @@ def parse_pdf(pdf_path, filename, index, url):
         page_summaries = []
         raw_text = ""
 
-        if not os.path.exists(failed_pages_file):
-            with open(failed_pages_file, mode="w", newline="", encoding="utf-8") as file:
-                writer = csv.writer(file)
-                writer.writerow(["Filename", "Page", "URL"])
-
         # Process one page at a time to save memory
         for i in range(1, num_pages + 1):
-            logging.info(f"Processing page {i} of {filename}")
-
             # Convert only the current page
             images = convert_from_path(pdf_path, dpi=300, first_page=i, last_page=i)
             if not images:
@@ -447,7 +413,6 @@ def parse_pdf(pdf_path, filename, index, url):
             json_response = None
             failed_markdown = ""
             for attempt in range(MAX_RETRIES):
-                logging.info(f"Attempt {attempt + 1}/{MAX_RETRIES} for page {i} of {filename}")
                 markdown = image_to_markdown(images[0], previous_markdown, first_summary, index, failed_markdown, attempt)
                 
                 if not markdown.strip() or "No markdown extracted." in markdown:
@@ -461,19 +426,19 @@ def parse_pdf(pdf_path, filename, index, url):
                     except json.JSONDecodeError as e:
                         failed_markdown = markdown
                         logging.error(f"JSON decode error for {filename} on page {i}: {e}")
-                        logging.error(f"Failed markdown content:\n{markdown}")
                 
                 time.sleep(exponential_backoff(attempt))  # Exponential backoff before retrying
 
             # If JSON parsing failed after retries, handle accordingly
             if json_response is None:
                 logging.error(f"Page {i} of {filename} failed after {MAX_RETRIES} attempts.")
-                with open(failed_pages_file, mode="a", newline="", encoding="utf-8") as file:
-                    writer = csv.writer(file)
-                    if url != "":
-                        writer.writerow([filename, i, url])
-                    else:
-                        writer.writerow([filename, i, data.iloc[index]["Link"].strip()])
+                failed_collection.insert_one({
+                    "doc_id": filename,
+                    "page": i,
+                    "error": failed_markdown,
+                    "timestamp": datetime.now(),
+                    "url": url
+                })
                 # Abort the entire PDF if the first page fails
                 logging.error("Aborting entire PDF processing.")
                 return [], 0, {}
@@ -483,7 +448,6 @@ def parse_pdf(pdf_path, filename, index, url):
             previous_markdown = markdown
             markdown_outputs.append((i, json_response))
             page_summaries.append(json_response["summary"])
-            logging.info(f"Parsed page {i} for {filename}")
 
             # Append text to raw_text
             raw_text += f"\n\nPage: {i}"
@@ -495,13 +459,6 @@ def parse_pdf(pdf_path, filename, index, url):
 
         page_summary_text = "\n\n".join(page_summaries)
         metadata = generate_metadata(filename, raw_text, page_summary_text, index, num_pages, url)
-
-        with page_lock:
-            total_pages_processed += num_pages + 1
-            if total_pages_processed >= PAGE_LIMIT:
-                page_limit_reached = True
-                logging.warning("Page limit reached.")
-
         return markdown_outputs, num_pages, metadata
 
     except Exception as e:
@@ -513,11 +470,10 @@ def parse_pdf(pdf_path, filename, index, url):
 def parse_image(image_path, filename, index, url):
     global total_pages_processed
     try:
-        logging.info(f"Parsing image: {image_path}")
+        logging.info(f"Parsing image: {filename}")
         image = Image.open(image_path)
         failed_markdown = ""
         for attempt in range(MAX_RETRIES):
-            logging.info(f"Attempt {attempt + 1}/{MAX_RETRIES} for page 1 of {filename}")
             markdown = image_to_markdown(image, "", "", index, failed_markdown, attempt)
             
             if not markdown.strip() or "No markdown extracted." in markdown:
@@ -531,7 +487,6 @@ def parse_image(image_path, filename, index, url):
                 except json.JSONDecodeError as e:
                     failed_markdown = markdown
                     logging.error(f"JSON decode error for {filename} on page 1: {e}")
-                    logging.error(f"Failed markdown content:\n{markdown}")
             
             time.sleep(exponential_backoff(attempt))
         
@@ -542,53 +497,47 @@ def parse_image(image_path, filename, index, url):
             logging.error(f"Image {image_path} failed to parse. Aborting.")
             return [], 0, {}
         metadata = generate_metadata(filename, raw_text, json_response["summary"], index, 1, url)
-        with page_lock:
-            
-            total_pages_processed += 2
-            if total_pages_processed >= PAGE_LIMIT:
-                page_limit_reached = True
-                logging.warning("Page limit reached.")
+        
         return [(1, json_response)], 1, metadata
     except Exception as e:
         logging.error(f"Parsing failed for image {image_path}: {e}")
         return [], 0, {}
 
 def process_file(filename, index, url):
-    file_path = os.path.join(download_dir, filename)
-    logging.info(f"Processing file: {filename}")
-    if filename.lower().endswith('.pdf'):
-        chunks, num_pages, metadata = parse_pdf(file_path, filename, index, url)
-    elif filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
-        chunks, num_pages, metadata = parse_image(file_path, filename, index, url)
-    else:
-        logging.warning(f"Unsupported file type for {filename}, skipping parsing.")
-        os.remove(file_path)
+    try:
+        file_path = os.path.join(download_dir, filename)
+        logging.info(f"Processing file: {filename}")
+        if filename.lower().endswith('.pdf'):
+            chunks, num_pages, metadata = parse_pdf(file_path, filename, index, url)
+        elif filename.lower().endswith(('.png', '.jpg', '.jpeg', '.gif', '.bmp')):
+            chunks, num_pages, metadata = parse_image(file_path, filename, index, url)
+        else:
+            logging.warning(f"Unsupported file type for {filename}, skipping parsing.")
+            os.remove(file_path)
+            download_semaphore.release()
+            return
+        if num_pages > 0:
+            logging.info(f"Parsed {filename} successfully.")
+            parsed_queue.put((filename, chunks, metadata))
+            os.remove(file_path)
+            logging.info(f"Deleted processed file: {filename}")
+        else:
+            os.remove(file_path)
+            logging.info(f"Deleted unprocessed file: {filename}")
         download_semaphore.release()
-        return
-    if num_pages > 0:
-        logging.info(f"Parsed {filename} successfully.")
-        parsed_queue.put((filename, chunks, metadata))
-        os.remove(file_path)
-        logging.info(f"Deleted processed file: {filename}")
-    else:
-        os.remove(file_path)
-        logging.info(f"Deleted unprocessed file: {filename}")
-    download_semaphore.release()
+    except Exception as e:
+        logging.error(f"Processing failed for file {filename}: {e}")
+        download_semaphore.release()
 
 def start_parse():
-    with ThreadPoolExecutor(max_workers=NUM_FILE_WORKERS) as executor:
-        futures = []
-        while not (download_done and download_queue.empty()):
-            try:
-                filename, index, url = download_queue.get(timeout=5)
-                logging.debug(f"Submitting process_file task for {filename}")
-                future = executor.submit(process_file, filename, index, url)
-                futures.append(future)
-                download_queue.task_done()
-            except Empty:
-                continue
-        for future in futures:
-            future.result()
+    while not (download_done and download_queue.empty()):
+        try:
+            filename, index, url = download_queue.get(timeout=5)
+            logging.debug(f"Submitting process_file task for {filename}")
+            process_file(filename, index, url)
+            download_queue.task_done()
+        except Empty:
+            continue
 
 def get_embedding(text):
     global last_embedding_time
@@ -608,7 +557,6 @@ def get_embedding(text):
                 config=EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
             )
             embedding = response.embeddings[0].values
-            logging.debug("Successfully got embedding for text.")
             return embedding
         except Exception as e:
             if attempt < retries:
@@ -636,7 +584,6 @@ def get_embeddings_batch(texts):
                 config=EmbedContentConfig(task_type="RETRIEVAL_DOCUMENT")
             )
             embeddings = [embedding.values for embedding in response.embeddings]
-            logging.debug("Batch embeddings retrieved successfully.")
             return embeddings
         except Exception as e:
             if attempt < retries:
@@ -747,11 +694,12 @@ def start_vector():
             logging.info(f"Vectorizing: {filename}")
             try:
                 vectorize(chunks, metadata)
-                with open(success_log_file, "a", encoding="utf-8") as logfile:
-                    logfile.write(filename.strip() + "\n")
                 logging.info(f"Successfully vectorized: {filename}")
             except Exception as e:
                 logging.error(f"Vectorization process failed for {filename}: {e}. No data stored.")
+                failed_collection.insert_one({
+                    **metadata
+                })
                 continue
         except Empty:
             continue
@@ -765,20 +713,21 @@ vectorizing_thread.start()
 processed_indexes = set()
 try:
     fetched_links = set(documents_collection.distinct("Link"))
+    fetched_titles_dates = set(
+        (doc["Title"].strip().casefold(), doc["Publish Date"].strftime("%d-%m-%Y")) for doc in documents_collection.find({}, {"Title": 1, "Publish Date": 1})
+    )
     logging.info(f"Already processed links: {len(fetched_links)}")
-    with ThreadPoolExecutor(max_workers=10) as download_executor:
-        session = requests.Session()
-        for index, row in data.iterrows():
-            with page_lock:
-                if page_limit_reached:
-                    break
-            link_value = str(row["Link"]).strip()
-            if not link_value:
-                link_value = "https://www.imsnsit.org/imsnsit/notifications.php" + " | " + str(row["Title"]).strip().lower()
-            if link_value in fetched_links and "drive.google.com/drive/folders" not in link_value:
-                logging.info(f"Skipping {row['Title']} as it's already processed.")
-                continue
-            download_executor.submit(download_file, row["Link"], session, headers, index, fetched_links)
+    session = requests.Session()
+    for index, row in data.iterrows():
+        link_value = str(row["Link"]).strip()
+        if not link_value:
+            link_value = "https://www.imsnsit.org/imsnsit/notifications.php" + " | " + str(row["Title"]).strip().lower()
+        if link_value in fetched_links and "drive.google.com/drive/folders" not in link_value:
+            logging.info(f"Skipping {row['Title']} as it's already processed.")
+            continue
+        if (row["Title"].strip().casefold(), row["Date"]) in fetched_titles_dates and "drive.google.com/drive/folders" not in link_value:
+            logging.info(f"Skipping {row['Title']} as it's already processed.")
+        download_file(row["Link"], session, headers, index, fetched_links)
     download_done = True
     parsing_thread.join()
     parse_done = True
