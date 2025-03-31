@@ -13,7 +13,7 @@ jobs:
           SUCCESS_COUNT=0  # Counter for 200 responses
 
           while true; do
-            STATUS=$(curl -s -o /dev/null -w "%{http_code}" https://mimir-pipeline.onrender.com/start)
+            STATUS=$(curl -s -o /dev/null -w "%{http_code}" -X POST https://mimir-pipeline.onrender.com/start)
             echo "Response Code: $STATUS"
 
             if [ "$STATUS" -eq 200 ]; then
