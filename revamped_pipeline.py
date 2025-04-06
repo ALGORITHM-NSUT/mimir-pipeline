@@ -160,11 +160,14 @@ def download_file(url, session, headers, index, fetched_links):
     logging.debug(f"Acquiring semaphore for download_file")
     download_semaphore.acquire()
     try:        
-        if url == "" or (isinstance(url, float) and math.isnan(url)):
+        if url == "" or (isinstance(url, float) and math.isnan(url)) or "https://docs.google.com/forms" in url:
             logging.info(f"⬇️ Downloading file with URL: {url}")
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Arial", size=12)
+            pdf_text = data.iloc[index]['Title']
+            if "https://docs.google.com/forms" in url:
+                pdf_text += "\nGoogle Form Link: " + url
             pdf.cell(200, 10, txt=data.iloc[index]["Title"], ln=True, align='C')
             file_name = sanitize_filename(f"{data.iloc[index]['Title'][:100]}.pdf")
             file_path = os.path.join(download_dir, file_name)
@@ -188,7 +191,6 @@ def download_file(url, session, headers, index, fetched_links):
             download_semaphore.release()  # Release current slot before processing folder links.
             for link in file_links:
                 download_file(link, session, headers, index, fetched_links)
-            return
         elif "https://www.imsnsit.org/" in url:
             logging.info(f"⬇️ Downloading file with URL: {url}")
             response = session.get(url, headers=headers, stream=True, timeout=120)
@@ -613,6 +615,8 @@ def vectorize(chunks, doc):
                 current_text = chunk["text"].strip()
                 if ("optional_summary" in chunk and chunk["optional_summary"] and chunk["optional_summary"] is not None
                     and chunk["optional_summary"].strip().lower() not in ["null", "none"]):
+                    if re.match(r"^\s*\|", current_text):
+                        current_text = chunk["optional_summary"] + "\n" + current_text
                     embedding_text = chunk["optional_summary"] + "\n" + page_chunks["summary"]
                     new_chunk = (page, current_text, embedding_text, True, chunk["optional_summary"])
                 else:
