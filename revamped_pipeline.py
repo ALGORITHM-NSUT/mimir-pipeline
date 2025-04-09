@@ -82,7 +82,7 @@ headers = {
 
 
 def sanitize_filename(filename):
-    sanitized = re.sub(r'[<>:"/\\|?*];', '', filename)
+    sanitized = re.sub(r'[<>:"/\\|?*]', '', filename)
     return sanitized
 
 def get_filename_from_header(response):
@@ -160,23 +160,24 @@ def download_file(url, session, headers, index, fetched_links):
     logging.debug(f"Acquiring semaphore for download_file")
     download_semaphore.acquire()
     try:        
-        if url == "" or (isinstance(url, float) and math.isnan(url)) or "https://docs.google.com/forms" in url:
+        if url == "" or (isinstance(url, float) and math.isnan(url)) or "docs.google.com/forms" in url:
             logging.info(f"⬇️ Downloading file with URL: {url}")
             pdf = FPDF()
             pdf.add_page()
             pdf.set_font("Arial", size=12)
             pdf_text = data.iloc[index]['Title']
-            if "https://docs.google.com/forms" in url:
-                pdf_text += "\nGoogle Form Link: " + url
-            pdf.cell(200, 10, txt=data.iloc[index]["Title"], ln=True, align='C')
+            if "docs.google.com/forms" in url:
+                pdf_text += "\n Google Form Link: " + url
+            pdf.cell(200, 10, txt=pdf_text, ln=True, align='C')
             file_name = sanitize_filename(f"{data.iloc[index]['Title'][:100]}.pdf")
             file_path = os.path.join(download_dir, file_name)
+            pdf.output(file_path)
+            logging.info(f"PDF saved: {file_path}")
             if os.path.exists(file_path):
                 logging.info(f"File {file_name} exists, skipping creation.")
                 download_queue.put((file_name, index, ""))
                 return
-            pdf.output(file_path)
-            logging.info(f"PDF saved: {file_path}")
+            
             download_queue.put((file_name, index, ""))
         elif "drive.google.com/uc?id=" in url:
             download_drivefile(file_url=url, index=index, fetched_links=fetched_links)
@@ -215,6 +216,7 @@ def download_file(url, session, headers, index, fetched_links):
     except requests.exceptions.RequestException as e:
         logging.error(f"Failed to download {url}: {e}")
         download_semaphore.release()
+        return
 
 def generate_metadata(filename, raw_text, page_summary_text, index, num_pages, url):
     global last_gemini_time
